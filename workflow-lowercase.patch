@@ -1,0 +1,31 @@
+diff --git a/.github/workflows/docker.yml b/.github/workflows/docker.yml
+index c7d7496..3e4f40a 100644
+--- a/.github/workflows/docker.yml
++++ b/.github/workflows/docker.yml
+@@ -68,10 +68,14 @@ jobs:
+           username: ${{ github.actor }}
+           password: ${{ secrets.GITHUB_TOKEN }}
+ 
++      # GHCR image names must be lowercase; the owner (e.g. MegaTheLEGEND) may not be.
++      - id: repo
++        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
++
+       - id: meta
+         uses: docker/metadata-action@v6
+         with:
+-          images: ghcr.io/${{ github.repository }}
++          images: ghcr.io/${{ steps.repo.outputs.name }}
+           tags: |
+             type=raw,value=latest,enable={{is_default_branch}}
+             type=semver,pattern={{version}}
+@@ -88,8 +92,8 @@ jobs:
+           labels: ${{ steps.meta.outputs.labels }}
+           build-args: |
+             BUILD_VERSION=${{ steps.meta.outputs.version }}
+-          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+-          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref=ghcr.io/{0}:buildcache,mode=max', github.repository) || '' }}
++          cache-from: type=registry,ref=ghcr.io/${{ steps.repo.outputs.name }}:buildcache
++          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref=ghcr.io/{0}:buildcache,mode=max', steps.repo.outputs.name) || '' }}
+ 
+       - name: Smoke test image (CPU, no models)
+         if: github.event_name != 'pull_request'
