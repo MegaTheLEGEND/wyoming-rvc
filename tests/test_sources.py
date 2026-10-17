@@ -20,8 +20,7 @@ voices:
     name: "jarvis"
     language: "en"
     piper_voice: en_GB-northern_english_male-medium
-    model_file: "/config/models/jarvis/model.pth"
-    index_file: "/config/models/jarvis/model.index"
+    repo_id: a/j
     pitch: -6
   plain:
     repo_id: a/b
