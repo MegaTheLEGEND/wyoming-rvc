@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- New option `idle_sleep_s` (default 300 seconds, `0` = off): after that long without a request the models (RVC voices, ContentVec, RMVPE, Piper and per-voice sources) are unloaded to free VRAM, and reloaded by the next request, which is slower by the reload time. It is on by default; set `idle_sleep_s` to `0` to keep everything loaded as before.
+
 ## 0.4.2
 
 - Each voice in `voices.yaml` can now have its own TTS source: its own Piper voice
@@ -8,9 +12,6 @@
   global source, so existing setups behave as before. A named `piper_voice` also sets the voice's
   language. Per-voice Piper voices load on first use (`SOURCE_MAX_LOADED`, default 4, stay resident).
   Reload the Wyoming integration after updating.
-## Unreleased
-
-- New option `idle_sleep_s` (default 300 seconds, `0` = off): after that long without a request the models are unloaded to free VRAM, and reloaded by the next request, which is slower by the reload time.
 
 ## 0.4.1
 
