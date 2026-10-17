@@ -288,6 +288,8 @@ class Service:
         return self.shared is not None or hasattr(self.source, "unload")
 
     def _unload_blocking(self) -> None:
+        if self.sources is not None:
+            self.sources.unload_all()  # per-voice sources reload lazily on their next use
         if self.shared is not None:
             self.shared.unload()
         unload = getattr(self.source, "unload", None)  # only the in-process Piper holds a model

@@ -49,6 +49,17 @@ class SourceRegistry:
         with self._lock:
             return list(self._cache)
 
+    def unload_all(self) -> list[SourceSpec]:
+        """Drop every per-voice source (idle sleep); they load again on next use. The global source stays."""
+        with self._build_lock, self._lock:
+            specs, sources = list(self._cache), list(self._cache.values())
+            self._cache.clear()
+        for source in sources:
+            unload = getattr(source, "unload", None)  # a Piper engine; an upstream client holds no model
+            if unload is not None:
+                unload()
+        return specs
+
     # ------------------------------------------------------------------ provisioning
 
     def prepare(self, spec: SourceSpec) -> None:

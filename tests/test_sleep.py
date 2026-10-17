@@ -252,3 +252,23 @@ async def test_service_sleep_and_wake_unload_and_reload_everything(monkeypatch):
     assert not service.voices.is_loaded("v")
     await service._wake_models()
     assert service.shared.loads == 1 and service.source.loaded
+
+
+def test_registry_unload_all_drops_per_voice_sources_and_they_reload_on_use():
+    from wyoming_rvc.sources import SourceRegistry
+    from wyoming_rvc.voices import SourceSpec
+
+    registry = SourceRegistry(Settings.from_env({}), "global")
+    made = []
+
+    class Source:
+        unloaded = False
+
+        def unload(self):
+            self.unloaded = True
+
+    registry._build = lambda spec: made.append(Source()) or made[-1]
+    spec = SourceSpec(kind="piper", piper_voice="en_GB-x")
+    first = registry.get(spec)
+    assert registry.unload_all() == [spec] and first.unloaded and registry.loaded() == []
+    assert registry.get(spec) is made[1] and registry.get(None) == "global"
