@@ -1,0 +1,892 @@
+diff --git a/README.md b/README.md
+index f7246da..ddf8d0f 100644
+--- a/README.md
++++ b/README.md
+@@ -54,7 +54,7 @@ text ─► TTS source ─► RVC voice layer ─► PCM 16-bit ─► Wyoming 
+ Prebuilt image (built by GitHub Actions on every push to `main`):
+ 
+ ```bash
+-git clone https://github.com/xchwarze/wyoming-rvc && cd wyoming-rvc
++git clone https://github.com/MegaTheLEGEND/wyoming-rvc && cd wyoming-rvc
+ docker compose pull          # or: docker compose build
+ docker compose up -d
+ docker compose logs -f       # wait for "Service ready"
+@@ -70,7 +70,7 @@ Without compose:
+ ```bash
+ docker run -d --name wyoming-rvc --gpus all --restart unless-stopped \
+   -p 127.0.0.1:8080:8080 -p 10200:10200 -v "$PWD/models:/models" \
+-  ghcr.io/xchwarze/wyoming-rvc:latest
++  ghcr.io/megathelegend/wyoming-rvc:latest
+ ```
+ 
+ Check that it works:
+@@ -100,7 +100,7 @@ built-in **Wyoming Protocol** integration.
+ ### Option A: Home Assistant app (add-on)
+ 
+ 1. **Settings → Apps → App Store → ⋮ → Repositories**, then add
+-   `https://github.com/xchwarze/wyoming-rvc`.
++   `https://github.com/MegaTheLEGEND/wyoming-rvc`.
+ 2. Install **Wyoming RVC**, start it, and wait for the first start to download the
+    models (about 1 GB).
+ 3. Home Assistant discovers it automatically: accept the new **Wyoming Protocol** entry
+@@ -200,6 +200,36 @@ voice list once). The one difference from 0.2 is that a request naming another v
+ `VOICE_NAME`) now fails instead of using the configured voice, so reselect the voice in
+ Home Assistant.
+ 
++**A different TTS source per voice.** By default every voice is fed by the one global source
++(`SOURCE`, `PIPER_VOICE`, `WYOMING_UPSTREAM`). Add source keys to a voice in `voices.yaml` to give
++it its own:
++
++```
++voices:
++  jarvis:
++    piper_voice: en_GB-northern_english_male-medium   # own in-process Piper voice
++    model_file: "/config/models/jarvis/model.pth"
++    index_file: "/config/models/jarvis/model.index"
++    pitch: -6
++  kokoro_miku:
++    repo_id: "binant/Hatsune_Miku__RVC_v2_"
++    upstream: "tcp://kokoro:10200"                    # any Wyoming TTS
++    upstream_voice: "af_heart"
++```
++
++Piper keys: `piper_voice` or `piper_model` (+ `piper_config`), `piper_speaker_id`,
++`piper_length_scale`, `piper_noise_scale`, `piper_noise_w_scale`. Wyoming keys: `upstream`
++(defaults to `WYOMING_UPSTREAM`), `upstream_voice`, `upstream_speaker`. Unset options fall back
++to the global ones. The source is picked from the keys, or set `source: piper|wyoming` to reuse
++the global Piper voice or upstream with different options. A named `piper_voice` also sets the
++voice's language unless you set `language`.
++
++Per-voice Piper voices are downloaded at startup but only loaded on first use; at most
++`SOURCE_MAX_LOADED` (default 4) stay resident, least recently used first. A voice whose files
++cannot be downloaded or whose upstream is unreachable is not offered (the others are). The
++global source is still loaded at startup, and with `RVC_ENABLED=false` per-voice sources are
++ignored.
++
+ **Another Piper voice or language.** The default source voice is `en_US-ljspeech-high`
+ (female, US English). Any voice from
+ [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) works, or your own model
+@@ -222,7 +252,7 @@ services:
+     command: --voice en_US-ljspeech-high
+     volumes: [./piper-data:/data]
+   wyoming-rvc:
+-    image: ghcr.io/xchwarze/wyoming-rvc:latest
++    image: ghcr.io/megathelegend/wyoming-rvc:latest
+     ports: ["10200:10200", "127.0.0.1:8080:8080"]
+     volumes: [./models:/models]
+     environment:
+@@ -336,6 +366,7 @@ Copy `.env.example` to `.env`; compose reads it. Empty values mean "use the defa
+ | `VOICES_FILE` | `/config/voices.yaml` | Voice list. If the default path is missing: your `RVC_*` voice if you set one, otherwise the built-in Teto and Miku |
+ | `DEFAULT_VOICE` | first enabled voice | Voice used when a request names none |
+ | `RVC_MAX_LOADED_MODELS` | `1` | RVC voices kept in VRAM (LRU). Each one costs the model plus its index, typically 100–400 MB |
++| `SOURCE_MAX_LOADED`                                                                  | `4`                           | Per-voice TTS sources (Piper voices, upstream connections from `voices.yaml`) kept loaded (LRU); the global source is never unloaded      |
+ | `VOICE_NAME` / `VOICE_LANGUAGE` | `teto` / from `PIPER_VOICE` | Voice id and language advertised to Home Assistant. The language defaults to the Piper voice's (`en` for other sources) |
+ | `WYOMING_PROGRAM_NAME` | `Wyoming RVC` | Name shown in Home Assistant |
+ | `WYOMING_HOST` / `WYOMING_PORT` | `0.0.0.0` / `10200` | Wyoming server |
+diff --git a/addon/CHANGELOG.md b/addon/CHANGELOG.md
+index d28b35b..f2f03da 100644
+--- a/addon/CHANGELOG.md
++++ b/addon/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## 0.4.2
++
++- Each voice in `voices.yaml` can now have its own TTS source: its own Piper voice
++  (`piper_voice`, `piper_model`, `piper_speaker_id`, ...) or its own upstream Wyoming TTS
++  (`upstream`, `upstream_voice`, `upstream_speaker`). Voices without these keys keep using the
++  global source, so existing setups behave as before. A named `piper_voice` also sets the voice's
++  language. Per-voice Piper voices load on first use (`SOURCE_MAX_LOADED`, default 4, stay resident).
++  Reload the Wyoming integration after updating.
++
+ ## 0.4.1
+ 
+ - The voices are listed under the language of `piper_voice` (for example `es` for
+diff --git a/addon/config.yaml b/addon/config.yaml
+index b33ba97..c9432c3 100644
+--- a/addon/config.yaml
++++ b/addon/config.yaml
+@@ -1,13 +1,13 @@
+ ---
+ name: Wyoming RVC
+-version: "0.4.1"
++version: "0.4.2"
+ slug: wyoming_rvc
+ description: Give any text-to-speech voice an RVC timbre (Piper + RVC over Wyoming)
+-url: https://github.com/xchwarze/wyoming-rvc
++url: https://github.com/MegaTheLEGEND/wyoming-rvc
+ arch:
+   - amd64
+ init: false
+-image: ghcr.io/xchwarze/wyoming-rvc
++image: ghcr.io/megathelegend/wyoming-rvc
+ map:
+   - addon_config:rw
+ discovery:
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 715f739..f79af70 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -1,7 +1,7 @@
+ services:
+   wyoming-rvc:
+     build: .
+-    image: ghcr.io/xchwarze/wyoming-rvc:latest
++    image: ghcr.io/megathelegend/wyoming-rvc:latest
+     ports:
+       - "127.0.0.1:8080:8080"   # HTTP debug API: no auth, local only (use "8080:8080" to expose it)
+       - "10200:10200" # Wyoming (Home Assistant)
+diff --git a/examples/voices.yaml b/examples/voices.yaml
+index 1b23435..f7ff2d7 100644
+--- a/examples/voices.yaml
++++ b/examples/voices.yaml
+@@ -9,6 +9,16 @@
+ #   pitch (-24..24), index_rate (0..1), protect (0..0.5), f0_method (rmvpe),
+ #   enabled (default true), preload (load at startup; if no voice sets it, the default voice is)
+ # Missing values fall back to the RVC_* / VOICE_LANGUAGE environment variables.
++#
++# Each voice may also pick its own TTS source (all optional; without them the voice uses the
++# global SOURCE / PIPER_VOICE / WYOMING_UPSTREAM):
++#   Piper (in-process):  piper_voice | piper_model (+ piper_config), piper_speaker_id,
++#                        piper_length_scale, piper_noise_scale, piper_noise_w_scale
++#   Any Wyoming TTS:     upstream (tcp://host:port; default: the global WYOMING_UPSTREAM),
++#                        upstream_voice, upstream_speaker
++#   source: piper|wyoming is inferred from the keys; set it only to reuse the global Piper
++#   voice / upstream with different options. Do not mix piper_* and upstream* keys.
++# A named piper_voice also sets the voice's language (en_GB-... -> en) unless 'language' is set.
+ # Voice ids are lowercase (a-z 0-9 _ -); quote ids like "on" or "no", which YAML reads as booleans.
+ 
+ voices:
+@@ -42,3 +52,20 @@ voices:
+   #   name: "Local Voice"
+   #   model_file: "/models/my/voice.pth"
+   #   index_file: "/models/my/voice.index"
++
++  # Own Piper voice (male British English) feeding a local RVC model.
++  # jarvis:
++  #   name: "Jarvis"
++  #   language: "en"
++  #   piper_voice: en_GB-northern_english_male-medium
++  #   model_file: "/config/models/jarvis/model.pth"
++  #   index_file: "/config/models/jarvis/model.index"
++  #   pitch: -6
++  #   index_rate: 0.6
++  #   protect: 0.33
++
++  # Own upstream TTS (any Wyoming server) for this voice only.
++  # kokoro_miku:
++  #   repo_id: "binant/Hatsune_Miku__RVC_v2_"
++  #   upstream: "tcp://kokoro:10200"
++  #   upstream_voice: "af_heart"
+diff --git a/pyproject.toml b/pyproject.toml
+index bd50b47..79b3d8f 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "wyoming-rvc"
+-version = "0.4.1"
++version = "0.4.2"
+ description = "Wyoming TTS layer for Home Assistant that gives any voice an RVC timbre (in-process Piper or any upstream Wyoming TTS), fully resident on the GPU"
+ readme = "README.md"
+ license = "GPL-3.0-or-later"
+diff --git a/repository.yaml b/repository.yaml
+index d429686..44bc6d1 100644
+--- a/repository.yaml
++++ b/repository.yaml
+@@ -1,3 +1,3 @@
+ name: wyoming-rvc
+-url: https://github.com/xchwarze/wyoming-rvc
+-maintainer: xchwarze
++url: https://github.com/MegaTheLEGEND/wyoming-rvc
++maintainer: MegaTheLEGEND
+diff --git a/src/wyoming_rvc/__init__.py b/src/wyoming_rvc/__init__.py
+index aa1e44e..f8b88c1 100644
+--- a/src/wyoming_rvc/__init__.py
++++ b/src/wyoming_rvc/__init__.py
+@@ -1,4 +1,4 @@
+ """Wyoming TTS layer: any TTS (in-process Piper or an upstream Wyoming server) + RVC voice conversion."""
+ 
+-__version__ = "0.4.1"
++__version__ = "0.4.2"
+ PROJECT_URL = "https://github.com/xchwarze/wyoming-rvc"
+diff --git a/src/wyoming_rvc/config.py b/src/wyoming_rvc/config.py
+index 3a2e459..038c633 100644
+--- a/src/wyoming_rvc/config.py
++++ b/src/wyoming_rvc/config.py
+@@ -78,6 +78,7 @@ class Settings:
+     upstream_voice: str | None = None
+     upstream_speaker: str | None = None
+     upstream_timeout_s: float = 30.0
++    source_max_loaded: int = 4
+ 
+     program_name: str = "Wyoming RVC"
+     voice_name: str = "teto"
+@@ -141,6 +142,7 @@ class Settings:
+             upstream_voice=r.opt_str("UPSTREAM_VOICE"),
+             upstream_speaker=r.opt_str("UPSTREAM_SPEAKER"),
+             upstream_timeout_s=r.float("UPSTREAM_TIMEOUT_S", 30.0, lo=1.0, hi=600.0),
++            source_max_loaded=r.int("SOURCE_MAX_LOADED", 4, lo=1, hi=32),
+             program_name=r.str("WYOMING_PROGRAM_NAME", "Wyoming RVC"),
+             voice_name=r.str("VOICE_NAME", "teto"),
+             voice_language=r.opt_str("VOICE_LANGUAGE") or "",
+diff --git a/src/wyoming_rvc/main.py b/src/wyoming_rvc/main.py
+index 6a9d734..0b1ce4d 100644
+--- a/src/wyoming_rvc/main.py
++++ b/src/wyoming_rvc/main.py
+@@ -143,6 +143,7 @@ class Service:
+         self.torch_facts: dict[str, Any] = {}
+         self.source = None
+         self.source_name = ""
++        self.sources = None  # SourceRegistry: global source + per-voice sources
+         self.voices = None  # VoiceManager when RVC is enabled
+         self.warmup_ms: float | None = None
+         self.wyoming = None
+@@ -226,10 +227,12 @@ class Service:
+     def load_models(self) -> None:
+         """Blocking: load the source and shared RVC models, provision every voice."""
+         from .model_loader import resolve_rvc_assets, resolve_rvc_files
++        from .sources import SourceRegistry
+         from .voices import VoiceManager, load_voice_configs
+ 
+         s = self.settings
+         self.load_source()
++        self.sources = SourceRegistry(s, self.source)
+         if not s.rvc_enabled:
+             _LOGGER.warning("RVC_ENABLED=false: serving the TTS source unchanged")
+             return
+@@ -247,6 +250,9 @@ class Service:
+                 voice.repo_id, voice.revision, voice.model_file, voice.index_file, s.rvc_data_dir, f"voice {voice.id}"
+             )
+             _LOGGER.info("Voice %s: model=%s index=%s", voice.id, files.model, files.index or "none")
++            if voice.source is not None:
++                self.sources.prepare(voice.source)  # a voice with an unusable source is not offered
++                _LOGGER.info("Voice %s: source=%s", voice.id, voice.source.describe())
+             return files, validate_voice_files(files.model, files.index)
+ 
+         def load(voice, files):
+@@ -303,6 +309,7 @@ class Service:
+                 defaults=SynthesisOptions.from_settings(s),
+                 rvc_concurrency=s.rvc_concurrency,
+                 sentence_silence_ms=s.sentence_silence_ms,
++                sources=self.sources,
+             )
+             self.state.pipeline = pipeline
+             self.state.stage = "warmup"
+diff --git a/src/wyoming_rvc/pipeline.py b/src/wyoming_rvc/pipeline.py
+index 180a354..b28d0d3 100644
+--- a/src/wyoming_rvc/pipeline.py
++++ b/src/wyoming_rvc/pipeline.py
+@@ -16,7 +16,7 @@ import contextlib
+ import logging
+ from collections.abc import AsyncIterator, Callable, Iterator
+ from dataclasses import dataclass, replace
+-from typing import Protocol
++from typing import TYPE_CHECKING, Protocol
+ 
+ import numpy as np
+ 
+@@ -25,6 +25,9 @@ from .config import F0_METHODS, RVC_MODES, Settings
+ from .metrics import Stopwatch, SynthesisMetrics, now_ms
+ from .voices import VoiceConfig, VoiceManager
+ 
++if TYPE_CHECKING:
++    from .sources import SourceRegistry
++
+ _LOGGER = logging.getLogger(__name__)
+ 
+ 
+@@ -130,8 +133,10 @@ class TtsPipeline:
+         defaults: SynthesisOptions,
+         rvc_concurrency: int = 1,
+         sentence_silence_ms: int = 0,
++        sources: SourceRegistry | None = None,
+     ) -> None:
+-        self.source = source
++        self.source = source  # the global source; voices may name their own (see ``sources``)
++        self.sources = sources
+         # A bare engine is served as a single voice.
+         self.voices = rvc if (rvc is None or isinstance(rvc, VoiceManager)) else VoiceManager.single(rvc)
+         self.defaults = defaults.validate()
+@@ -171,7 +176,8 @@ class TtsPipeline:
+         use_rvc = options.rvc and self.voices is not None
+         whole = use_rvc and options.mode == "whole"
+         out_rate = self.sample_rate(options)
+-        in_rate = self.source.sample_rate
++        source = await self._source_for(options) if use_rvc else self.source
++        in_rate = source.sample_rate
+         metrics.text_chars = len(text)
+         metrics.mode = options.mode if use_rvc else "tts-only"
+         metrics.rvc = use_rvc
+@@ -190,7 +196,7 @@ class TtsPipeline:
+             if metrics.ttfa_ms is None:
+                 metrics.ttfa_ms = now_ms() - start
+ 
+-        sentences = self._sentences(text, gap, source_sw, metrics)
++        sentences = self._sentences(source, text, gap, source_sw, metrics)
+         try:
+             if not use_rvc:
+                 async for audio in sentences:
+@@ -227,11 +233,21 @@ class TtsPipeline:
+ 
+     # ------------------------------------------------------------------ helpers
+ 
++    async def _source_for(self, options: SynthesisOptions) -> SourceLike:
++        """The TTS source for the request's voice: its own (loaded on first use) or the global one."""
++        if self.voices is None or self.sources is None:
++            return self.source
++        spec = self.voices.resolve(options.voice).config.source
++        if spec is None:
++            return self.source
++        # Loading a Piper voice / probing an upstream blocks: keep it off the event loop.
++        return await asyncio.to_thread(self.sources.get, spec)
++
+     async def _sentences(
+-        self, text: str, gap: np.ndarray, sw: Stopwatch, metrics: SynthesisMetrics
++        self, source: SourceLike, text: str, gap: np.ndarray, sw: Stopwatch, metrics: SynthesisMetrics
+     ) -> AsyncIterator[np.ndarray]:
+         """Source audio per sentence, with inter-sentence silence before all but the first."""
+-        async with contextlib.aclosing(iterate_in_thread(self.source.sentences(text), sw)) as produced:
++        async with contextlib.aclosing(iterate_in_thread(source.sentences(text), sw)) as produced:
+             async for audio in produced:
+                 metrics.sentences += 1
+                 if metrics.sentences > 1 and gap.size:
+diff --git a/src/wyoming_rvc/sources.py b/src/wyoming_rvc/sources.py
+new file mode 100644
+index 0000000..4a4ece5
+--- /dev/null
++++ b/src/wyoming_rvc/sources.py
+@@ -0,0 +1,147 @@
++"""Per-voice TTS sources.
++
++Every voice can name its own source in ``voices.yaml`` (``piper_voice``, ``piper_model``,
++``upstream`` ...). ``SourceRegistry`` turns a voice's ``SourceSpec`` into a loaded source and
++shares it between voices with an equal spec. Voices without a spec use the global source that
++``main.Service`` loads from ``SOURCE`` / ``PIPER_VOICE`` / ``WYOMING_UPSTREAM``.
++
++Piper engines are small and are loaded on first use; at most ``SOURCE_MAX_LOADED`` per-voice
++sources stay resident (LRU). The global source is never evicted. A request that already holds a
++source keeps it alive even if it is evicted meanwhile.
++"""
++
++from __future__ import annotations
++
++import logging
++import threading
++from collections import OrderedDict
++from dataclasses import replace
++from pathlib import Path
++from typing import Any
++
++from .config import Settings
++from .voices import SourceSpec
++
++_LOGGER = logging.getLogger(__name__)
++
++
++def _first(voice_value: Any, global_value: Any) -> Any:
++    """The voice's own setting when it has one, else the global one."""
++    return global_value if voice_value is None else voice_value
++
++
++class SourceRegistry:
++    """Blocking ``get``/``prepare``; call them from a worker thread."""
++
++    def __init__(self, settings: Settings, default: Any, max_loaded: int | None = None) -> None:
++        self._settings = settings
++        self._default = default
++        self.max_loaded = max_loaded or settings.source_max_loaded
++        self._cache: OrderedDict[SourceSpec, Any] = OrderedDict()
++        self._lock = threading.Lock()  # guards _cache only
++        self._build_lock = threading.Lock()  # one load at a time (onnxruntime / espeak are not re-entrant-friendly)
++
++    @property
++    def default(self) -> Any:
++        return self._default
++
++    def loaded(self) -> list[SourceSpec]:
++        with self._lock:
++            return list(self._cache)
++
++    # ------------------------------------------------------------------ provisioning
++
++    def prepare(self, spec: SourceSpec) -> None:
++        """Startup check for a voice: download/validate Piper files, or probe the upstream."""
++        if spec.kind == "wyoming":
++            self.get(spec)  # probes the upstream and caches the connection details
++            return
++        from .model_loader import resolve_piper
++
++        resolve_piper(self._piper_settings(spec))
++
++    # ------------------------------------------------------------------ lookup
++
++    def get(self, spec: SourceSpec | None) -> Any:
++        """The loaded source for ``spec`` (the global one for ``None``)."""
++        if spec is None:
++            return self._default
++        with self._lock:
++            source = self._cache.get(spec)
++            if source is not None:
++                self._cache.move_to_end(spec)
++                return source
++        with self._build_lock:
++            with self._lock:  # another request may have loaded it while we waited
++                source = self._cache.get(spec)
++                if source is not None:
++                    self._cache.move_to_end(spec)
++                    return source
++            source = self._build(spec)
++            with self._lock:
++                self._cache[spec] = source
++                while len(self._cache) > self.max_loaded:
++                    evicted, _ = self._cache.popitem(last=False)
++                    _LOGGER.info("Unloading source %s (SOURCE_MAX_LOADED=%d)", evicted.describe(), self.max_loaded)
++            return source
++
++    # ------------------------------------------------------------------ construction
++
++    def _piper_settings(self, spec: SourceSpec) -> Settings:
++        """Global settings with this voice's Piper choices applied."""
++        s = self._settings
++        if spec.piper_model:
++            voice_choice: dict[str, Any] = {
++                "piper_model": Path(spec.piper_model),
++                "piper_config": Path(spec.piper_config) if spec.piper_config else None,
++            }
++        elif spec.piper_voice:
++            # A named voice must not be shadowed by a global PIPER_MODEL.
++            voice_choice = {"piper_voice": spec.piper_voice, "piper_model": None, "piper_config": None}
++        else:
++            voice_choice = {}  # only synthesis options differ: reuse the global voice
++        return replace(
++            s,
++            **voice_choice,
++            piper_speaker_id=_first(spec.piper_speaker_id, s.piper_speaker_id),
++            piper_length_scale=_first(spec.piper_length_scale, s.piper_length_scale),
++            piper_noise_scale=_first(spec.piper_noise_scale, s.piper_noise_scale),
++            piper_noise_w_scale=_first(spec.piper_noise_w_scale, s.piper_noise_w_scale),
++        )
++
++    def _build(self, spec: SourceSpec) -> Any:
++        s = self._settings
++        if spec.kind == "wyoming":
++            from .wyoming_source import WyomingSource
++
++            host, port = replace(s, wyoming_upstream=spec.upstream or s.wyoming_upstream).upstream_address()
++            _LOGGER.info("Connecting to upstream TTS %s:%d for a voice...", host, port)
++            source = WyomingSource(
++                host,
++                port,
++                spec.upstream_voice if spec.upstream_voice else (None if spec.upstream else s.upstream_voice),
++                spec.upstream_speaker if spec.upstream_speaker else (None if spec.upstream else s.upstream_speaker),
++                s.upstream_timeout_s,
++            )
++            source.load()
++            return source
++
++        from .model_loader import resolve_piper
++        from .piper_engine import PiperEngine, PiperOptions
++
++        ps = self._piper_settings(spec)
++        files = resolve_piper(ps)
++        engine = PiperEngine(
++            files.model,
++            files.config,
++            PiperOptions(
++                use_cuda=ps.piper_use_cuda,
++                length_scale=ps.piper_length_scale,
++                noise_scale=ps.piper_noise_scale,
++                noise_w_scale=ps.piper_noise_w_scale,
++                speaker_id=ps.piper_speaker_id,
++            ),
++        )
++        engine.load()
++        _LOGGER.info("Piper voice %s ready for a voice (%d Hz, %s)", files.voice, engine.sample_rate, engine.device)
++        return engine
+diff --git a/src/wyoming_rvc/voices.py b/src/wyoming_rvc/voices.py
+index 817440b..09c536e 100644
+--- a/src/wyoming_rvc/voices.py
++++ b/src/wyoming_rvc/voices.py
+@@ -19,12 +19,13 @@ import logging
+ import re
+ from collections import OrderedDict
+ from collections.abc import AsyncIterator, Callable
+-from dataclasses import dataclass
++from dataclasses import dataclass, replace
+ from pathlib import Path
+ from typing import Any
+ 
+-from .config import F0_METHODS, ConfigError, Settings
++from .config import F0_METHODS, SOURCES, ConfigError, Settings
+ from .metrics import now_ms
++from .model_loader import PIPER_VOICE_PATTERN
+ 
+ _LOGGER = logging.getLogger(__name__)
+ 
+@@ -43,13 +44,61 @@ _VOICE_KEYS = {
+     "index_rate",
+     "protect",
+     "f0_method",
++    # Per-voice TTS source (all optional; a voice without any of these uses the global source).
++    "source",
++    "piper_voice",
++    "piper_model",
++    "piper_config",
++    "piper_speaker_id",
++    "piper_length_scale",
++    "piper_noise_scale",
++    "piper_noise_w_scale",
++    "upstream",
++    "upstream_voice",
++    "upstream_speaker",
+ }
++_PIPER_KEYS = (
++    "piper_voice",
++    "piper_model",
++    "piper_config",
++    "piper_speaker_id",
++    "piper_length_scale",
++    "piper_noise_scale",
++    "piper_noise_w_scale",
++)
++_UPSTREAM_KEYS = ("upstream", "upstream_voice", "upstream_speaker")
+ 
+ 
+ class UnknownVoiceError(ValueError):
+     """The requested voice is not configured, not enabled, or not installed."""
+ 
+ 
++@dataclass(frozen=True)
++class SourceSpec:
++    """Where one voice's source audio comes from (``None`` fields inherit the global settings).
++
++    Hashable on purpose: ``SourceRegistry`` shares one loaded source between voices with equal specs.
++    """
++
++    kind: str  # "piper" | "wyoming"
++    piper_voice: str | None = None
++    piper_model: str | None = None
++    piper_config: str | None = None
++    piper_speaker_id: int | None = None
++    piper_length_scale: float | None = None
++    piper_noise_scale: float | None = None
++    piper_noise_w_scale: float | None = None
++    upstream: str | None = None
++    upstream_voice: str | None = None
++    upstream_speaker: str | None = None
++
++    def describe(self) -> str:
++        if self.kind == "wyoming":
++            target = self.upstream or "default-upstream"
++            return f"wyoming:{target}" + (f"/{self.upstream_voice}" if self.upstream_voice else "")
++        return f"piper:{self.piper_model or self.piper_voice or 'default'}"
++
++
+ @dataclass(frozen=True)
+ class VoiceConfig:
+     id: str
+@@ -65,6 +114,7 @@ class VoiceConfig:
+     index_rate: float = 0.6
+     protect: float = 0.33
+     f0_method: str = "rmvpe"
++    source: SourceSpec | None = None  # None: the global source (SOURCE / PIPER_VOICE / WYOMING_UPSTREAM)
+ 
+ 
+ # Served when there is no voices file and the RVC_* voice was not customized, so a fresh
+@@ -173,6 +223,7 @@ def _voice(vid: str, raw: Any, settings: Settings, source: str) -> VoiceConfig:
+             raise ConfigError(f"{where}: {key} must be {kind.__name__}")
+         return value
+ 
++    source = _source_spec(raw, get, settings, where)
+     model_file = get("model_file", str, None)
+     repo_id = get("repo_id", str, "")
+     if not repo_id and not (model_file and Path(model_file).is_absolute()):
+@@ -180,7 +231,7 @@ def _voice(vid: str, raw: Any, settings: Settings, source: str) -> VoiceConfig:
+     voice = VoiceConfig(
+         id=vid,
+         name=get("name", str, vid),
+-        language=get("language", str, settings.voice_language),
++        language=get("language", str, _source_language(source, settings.voice_language)),
+         repo_id=repo_id,
+         enabled=get("enabled", bool, True),
+         preload=get("preload", bool, False),
+@@ -191,6 +242,7 @@ def _voice(vid: str, raw: Any, settings: Settings, source: str) -> VoiceConfig:
+         index_rate=get("index_rate", float, settings.rvc_index_rate),
+         protect=get("protect", float, settings.rvc_protect),
+         f0_method=get("f0_method", str, settings.rvc_f0_method),
++        source=source,
+     )
+     if not -24 <= voice.pitch <= 24:
+         raise ConfigError(f"{where}: pitch must be within [-24, 24]")
+@@ -203,6 +255,87 @@ def _voice(vid: str, raw: Any, settings: Settings, source: str) -> VoiceConfig:
+     return voice
+ 
+ 
++def _source_language(spec: SourceSpec | None, default: str) -> str:
++    """A named Piper voice implies its language (``en_GB-...`` -> ``en``), like the global PIPER_VOICE."""
++    if spec is not None and spec.kind == "piper" and spec.piper_voice:
++        match = re.match(r"([a-z]{2,3})_[A-Z]{2}-", spec.piper_voice)
++        if match:
++            return match.group(1)
++    return default
++
++
++def _source_spec(raw: dict, get: Callable[[str, type, Any], Any], settings: Settings, where: str) -> SourceSpec | None:
++    """Parse the per-voice source keys; ``None`` when the voice uses the global source."""
++    kind = get("source", str, None)
++    if kind is not None and kind not in SOURCES:
++        raise ConfigError(f"{where}: source must be one of {', '.join(SOURCES)}; got {kind!r}")
++    has_piper = any(raw.get(k) is not None for k in _PIPER_KEYS)
++    has_upstream = any(raw.get(k) is not None for k in _UPSTREAM_KEYS)
++    if has_piper and has_upstream:
++        raise ConfigError(f"{where}: piper_* and upstream* keys cannot be mixed")
++    if kind is None:
++        if has_piper:
++            kind = "piper"
++        elif has_upstream:
++            kind = "wyoming"
++        else:
++            return None
++    if kind == "piper" and has_upstream:
++        raise ConfigError(f"{where}: source 'piper' does not take upstream* keys")
++    if kind == "wyoming" and has_piper:
++        raise ConfigError(f"{where}: source 'wyoming' does not take piper_* keys")
++
++    if kind == "wyoming":
++        upstream = get("upstream", str, None)
++        if not (upstream or settings.wyoming_upstream):
++            raise ConfigError(f"{where}: source 'wyoming' needs 'upstream: tcp://host:port' (or WYOMING_UPSTREAM)")
++        try:
++            replace(settings, wyoming_upstream=upstream or settings.wyoming_upstream).upstream_address()
++        except ConfigError as err:
++            raise ConfigError(f"{where}: {err}") from err
++        return SourceSpec(
++            kind="wyoming",
++            upstream=upstream,
++            upstream_voice=get("upstream_voice", str, None),
++            upstream_speaker=get("upstream_speaker", str, None),
++        )
++
++    piper_voice = get("piper_voice", str, None)
++    piper_model = get("piper_model", str, None)
++    piper_config = get("piper_config", str, None)
++    if piper_voice and piper_model:
++        raise ConfigError(f"{where}: set piper_voice or piper_model, not both")
++    if piper_config and not piper_model:
++        raise ConfigError(f"{where}: piper_config requires piper_model")
++    if piper_voice and not PIPER_VOICE_PATTERN.match(piper_voice):
++        raise ConfigError(
++            f"{where}: piper_voice {piper_voice!r} does not look like '<lang>_<REGION>-<name>-<quality>', "
++            "e.g. en_GB-northern_english_male-medium"
++        )
++    speaker = get("piper_speaker_id", int, None)
++    length = get("piper_length_scale", float, None)
++    noise = get("piper_noise_scale", float, None)
++    noise_w = get("piper_noise_w_scale", float, None)
++    for key, value, lo, hi in (
++        ("piper_speaker_id", speaker, 0, None),
++        ("piper_length_scale", length, 0.1, 5.0),
++        ("piper_noise_scale", noise, 0.0, 2.0),
++        ("piper_noise_w_scale", noise_w, 0.0, 2.0),
++    ):
++        if value is not None and ((lo is not None and value < lo) or (hi is not None and value > hi)):
++            raise ConfigError(f"{where}: {key} must be within [{lo}, {hi if hi is not None else 'inf'}]")
++    return SourceSpec(
++        kind="piper",
++        piper_voice=piper_voice,
++        piper_model=piper_model,
++        piper_config=piper_config,
++        piper_speaker_id=speaker,
++        piper_length_scale=length,
++        piper_noise_scale=noise,
++        piper_noise_w_scale=noise_w,
++    )
++
++
+ def _check_default(default: str | None, voices: list[VoiceConfig]) -> None:
+     if default is not None and default not in {v.id for v in voices if v.enabled}:
+         raise ConfigError(f"DEFAULT_VOICE={default!r} is not an enabled voice ({[v.id for v in voices]})")
+@@ -319,6 +452,7 @@ class VoiceManager:
+                 "loaded": self.is_loaded(vid),
+                 "default": vid == self.default_voice,
+                 "sample_rate": s.sample_rate,
++                "source": s.config.source.describe() if s.config.source else "default",
+                 "error": s.error,
+             }
+             for vid, s in self._states.items()
+diff --git a/tests/test_sources.py b/tests/test_sources.py
+new file mode 100644
+index 0000000..315632a
+--- /dev/null
++++ b/tests/test_sources.py
+@@ -0,0 +1,168 @@
++"""Per-voice TTS sources: voices.yaml keys, SourceRegistry, pipeline routing."""
++
++from dataclasses import replace
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from wyoming_rvc import model_loader, piper_engine
++from wyoming_rvc.config import ConfigError, Settings
++from wyoming_rvc.pipeline import SynthesisOptions, TtsPipeline
++from wyoming_rvc.sources import SourceRegistry
++from wyoming_rvc.voices import VoiceManager, parse_voices
++
++SETTINGS = Settings.from_env({})
++
++JARVIS = """
++voices:
++  jarvis:
++    name: "jarvis"
++    language: "en"
++    piper_voice: en_GB-northern_english_male-medium
++    model_file: "/config/models/jarvis/model.pth"
++    index_file: "/config/models/jarvis/model.index"
++    pitch: -6
++  plain:
++    repo_id: a/b
++  es:
++    repo_id: a/c
++    piper_voice: es_MX-claude-high
++    piper_length_scale: 1
++  kokoro:
++    repo_id: a/d
++    upstream: tcp://kokoro:10200
++    upstream_voice: af_heart
++"""
++
++
++def voices():
++    return {c.id: c for c in parse_voices(JARVIS, SETTINGS)}
++
++
++def test_voice_without_source_keys_uses_global_source():
++    assert voices()["plain"].source is None
++
++
++def test_piper_voice_key_selects_piper_and_language():
++    v = voices()
++    assert v["jarvis"].source.kind == "piper"
++    assert v["jarvis"].source.piper_voice == "en_GB-northern_english_male-medium"
++    assert v["jarvis"].pitch == -6
++    assert v["es"].language == "es"  # derived from the Piper voice when 'language' is not given
++    assert v["es"].source.piper_length_scale == 1.0
++
++
++def test_upstream_keys_select_wyoming():
++    spec = voices()["kokoro"].source
++    assert spec.kind == "wyoming" and spec.describe() == "wyoming:tcp://kokoro:10200/af_heart"
++
++
++def test_wyoming_voice_can_reuse_the_global_upstream():
++    text = "voices:\n  x:\n    repo_id: a/b\n    source: wyoming\n    upstream_voice: v\n"
++    [voice] = parse_voices(text, replace(SETTINGS, wyoming_upstream="tcp://h:1"))
++    assert voice.source.kind == "wyoming" and voice.source.upstream is None
++
++
++@pytest.mark.parametrize(
++    ("fragment", "message"),
++    [
++        ("piper_voice: en_US-lessac-medium\n    upstream: tcp://h:1", "cannot be mixed"),
++        ("piper_voice: nonsense", "does not look like"),
++        ("piper_voice: en_US-lessac-medium\n    piper_model: /m.onnx", "not both"),
++        ("source: piper\n    piper_config: /m.onnx.json", "requires piper_model"),
++        ("source: wyoming", "needs 'upstream"),
++        ("source: nope", "source must be one of"),
++        ("piper_length_scale: 9", "piper_length_scale"),
++        ("source: wyoming\n    piper_speaker_id: 1", "does not take piper_"),
++        ("source: piper\n    upstream_voice: v", "does not take upstream"),
++    ],
++)
++def test_invalid_source_keys_are_rejected(fragment, message):
++    with pytest.raises(ConfigError, match=message):
++        parse_voices(f"voices:\n  x:\n    repo_id: a/b\n    {fragment}\n", SETTINGS)
++
++
++# --------------------------------------------------------------------------- registry
++
++
++class FakePiper:
++    built: list[str] = []
++
++    def __init__(self, model, config, options):
++        self.sample_rate = 16000 if "northern" in str(model) else 22050
++        FakePiper.built.append(str(model))
++
++    def load(self):
++        pass
++
++    device = "cpu"
++
++    def sentences(self, text):
++        level = 0.4 if self.sample_rate == 16000 else 0.1
++        for _ in (p for p in text.split(".") if p.strip()):
++            yield np.full(int(self.sample_rate * 0.25), level, np.float32)
++
++
++@pytest.fixture
++def fake_piper(monkeypatch):
++    FakePiper.built = []
++    resolved = []
++
++    def resolve(settings):
++        resolved.append(settings)
++        name = settings.piper_model.name if settings.piper_model else settings.piper_voice
++        return model_loader.PiperFiles(Path(name), Path(f"{name}.json"), name)
++
++    monkeypatch.setattr(model_loader, "resolve_piper", resolve)
++    monkeypatch.setattr(piper_engine, "PiperEngine", FakePiper)
++    return resolved
++
++
++def test_registry_shares_and_evicts(fake_piper):
++    default = object()
++    reg = SourceRegistry(replace(SETTINGS, piper_model=Path("/global.onnx")), default, max_loaded=1)
++    v = voices()
++    assert reg.get(None) is default
++    first = reg.get(v["jarvis"].source)
++    assert reg.get(v["jarvis"].source) is first and len(FakePiper.built) == 1
++    # a named voice is not shadowed by a global PIPER_MODEL
++    assert fake_piper[-1].piper_model is None and fake_piper[-1].piper_voice == "en_GB-northern_english_male-medium"
++    reg.get(v["es"].source)  # max_loaded=1: jarvis is evicted
++    assert reg.loaded() == [v["es"].source]
++    assert fake_piper[-1].piper_length_scale == 1.0
++
++
++# --------------------------------------------------------------------------- pipeline
++
++
++class FakeRvc:
++    output_sample_rate = 32000
++
++    def __init__(self):
++        self.rates, self.levels = [], []
++
++    def convert(self, audio, rate, pitch, f0_method, index_rate, protect):
++        self.rates.append(rate)
++        self.levels.append(round(float(audio[0]), 1))
++        return np.zeros(int(audio.size * 32000 / rate), np.float32), 32000
++
++    def unload(self):
++        pass
++
++
++async def test_pipeline_uses_the_voices_own_source(fake_piper):
++    default = FakePiper(Path("default"), Path("d.json"), None)
++    rvc = FakeRvc()
++    configs = [c for c in voices().values() if c.id in ("jarvis", "plain")]
++    manager = VoiceManager(configs, "plain", lambda c: ("files", 32000), lambda c, f: rvc, 2)
++    manager.provision_all()
++    pipeline = TtsPipeline(default, manager, SynthesisOptions(), sources=SourceRegistry(SETTINGS, default))
++
++    await pipeline.synthesize("One.", pipeline.options(voice="plain"))
++    await pipeline.synthesize("One.", pipeline.options(voice="jarvis"))
++    tts_only = await pipeline.synthesize("One.", pipeline.options(rvc=False))
++
++    assert rvc.rates == [22050, 16000]  # global source for 'plain', jarvis's own Piper voice for 'jarvis'
++    assert rvc.levels == [0.1, 0.4]
++    assert tts_only.sample_rate == 22050  # without RVC the global source is used
