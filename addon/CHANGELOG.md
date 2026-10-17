@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New option `idle_sleep_s` (default 300 seconds, `0` = off): after that long without a request the models are unloaded to free VRAM, and reloaded by the next request, which is slower by the reload time.
+
 ## 0.4.1
 
 - The voices are listed under the language of `piper_voice` (for example `es` for
