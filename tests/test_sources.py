@@ -100,7 +100,7 @@ class FakePiper:
 
     def sentences(self, text):
         level = 0.4 if self.sample_rate == 16000 else 0.1
-        for part in (p for p in text.split(".") if p.strip()):
+        for _ in (p for p in text.split(".") if p.strip()):
             yield np.full(int(self.sample_rate * 0.25), level, np.float32)
 
 

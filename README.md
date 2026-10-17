@@ -54,7 +54,7 @@ text ─► TTS source ─► RVC voice layer ─► PCM 16-bit ─► Wyoming �
 Prebuilt image (built by GitHub Actions on every push to `main`):
 
 ```bash
-git clone https://github.com/xchwarze/wyoming-rvc && cd wyoming-rvc
+git clone https://github.com/MegaTheLEGEND/wyoming-rvc && cd wyoming-rvc
 docker compose pull          # or: docker compose build
 docker compose up -d
 docker compose logs -f       # wait for "Service ready"
@@ -70,7 +70,7 @@ Without compose:
 ```bash
 docker run -d --name wyoming-rvc --gpus all --restart unless-stopped \
   -p 127.0.0.1:8080:8080 -p 10200:10200 -v "$PWD/models:/models" \
-  ghcr.io/xchwarze/wyoming-rvc:latest
+  ghcr.io/megathelegend/wyoming-rvc:latest
 ```
 
 Check that it works:
@@ -100,7 +100,7 @@ built-in **Wyoming Protocol** integration.
 ### Option A: Home Assistant app (add-on)
 
 1. **Settings → Apps → App Store → ⋮ → Repositories**, then add
-   `https://github.com/xchwarze/wyoming-rvc`.
+   `https://github.com/MegaTheLEGEND/wyoming-rvc`.
 2. Install **Wyoming RVC**, start it, and wait for the first start to download the
    models (about 1 GB).
 3. Home Assistant discovers it automatically: accept the new **Wyoming Protocol** entry
@@ -252,7 +252,7 @@ services:
     command: --voice en_US-ljspeech-high
     volumes: [./piper-data:/data]
   wyoming-rvc:
-    image: ghcr.io/xchwarze/wyoming-rvc:latest
+    image: ghcr.io/megathelegend/wyoming-rvc:latest
     ports: ["10200:10200", "127.0.0.1:8080:8080"]
     volumes: [./models:/models]
     environment:

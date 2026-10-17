@@ -25,6 +25,11 @@ from .voices import SourceSpec
 _LOGGER = logging.getLogger(__name__)
 
 
+def _first(voice_value: Any, global_value: Any) -> Any:
+    """The voice's own setting when it has one, else the global one."""
+    return global_value if voice_value is None else voice_value
+
+
 class SourceRegistry:
     """Blocking ``get``/``prepare``; call them from a worker thread."""
 
@@ -98,12 +103,10 @@ class SourceRegistry:
         return replace(
             s,
             **voice_choice,
-            piper_speaker_id=s.piper_speaker_id if spec.piper_speaker_id is None else spec.piper_speaker_id,
-            piper_length_scale=s.piper_length_scale if spec.piper_length_scale is None else spec.piper_length_scale,
-            piper_noise_scale=s.piper_noise_scale if spec.piper_noise_scale is None else spec.piper_noise_scale,
-            piper_noise_w_scale=(
-                s.piper_noise_w_scale if spec.piper_noise_w_scale is None else spec.piper_noise_w_scale
-            ),
+            piper_speaker_id=_first(spec.piper_speaker_id, s.piper_speaker_id),
+            piper_length_scale=_first(spec.piper_length_scale, s.piper_length_scale),
+            piper_noise_scale=_first(spec.piper_noise_scale, s.piper_noise_scale),
+            piper_noise_w_scale=_first(spec.piper_noise_w_scale, s.piper_noise_w_scale),
         )
 
     def _build(self, spec: SourceSpec) -> Any:

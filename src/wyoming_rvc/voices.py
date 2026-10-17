@@ -288,7 +288,7 @@ def _source_spec(raw: dict, get: Callable[[str, type, Any], Any], settings: Sett
     if kind == "wyoming":
         upstream = get("upstream", str, None)
         if not (upstream or settings.wyoming_upstream):
-            raise ConfigError(f"{where}: source 'wyoming' needs 'upstream: tcp://host:port' (or a global WYOMING_UPSTREAM)")
+            raise ConfigError(f"{where}: source 'wyoming' needs 'upstream: tcp://host:port' (or WYOMING_UPSTREAM)")
         try:
             replace(settings, wyoming_upstream=upstream or settings.wyoming_upstream).upstream_address()
         except ConfigError as err:

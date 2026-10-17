@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2
+
+- Each voice in `voices.yaml` can now have its own TTS source: its own Piper voice
+  (`piper_voice`, `piper_model`, `piper_speaker_id`, ...) or its own upstream Wyoming TTS
+  (`upstream`, `upstream_voice`, `upstream_speaker`). Voices without these keys keep using the
+  global source, so existing setups behave as before. A named `piper_voice` also sets the voice's
+  language. Per-voice Piper voices load on first use (`SOURCE_MAX_LOADED`, default 4, stay resident).
+  Reload the Wyoming integration after updating.
+
 ## 0.4.1
 
 - The voices are listed under the language of `piper_voice` (for example `es` for

@@ -1,7 +1,7 @@
 services:
   wyoming-rvc:
     build: .
-    image: ghcr.io/xchwarze/wyoming-rvc:latest
+    image: ghcr.io/megathelegend/wyoming-rvc:latest
     ports:
       - "127.0.0.1:8080:8080"   # HTTP debug API: no auth, local only (use "8080:8080" to expose it)
       - "10200:10200" # Wyoming (Home Assistant)
