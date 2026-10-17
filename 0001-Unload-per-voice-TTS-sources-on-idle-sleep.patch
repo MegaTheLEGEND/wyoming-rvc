@@ -1,0 +1,96 @@
+From ee54a93fd88551c2d1960bd201484c2d3d02e84c Mon Sep 17 00:00:00 2001
+From: MegaTheLEGEND <megaderp100@gmail.com>
+Date: Sat, 17 Oct 2026 00:18:59 -0700
+Subject: [PATCH] Unload per-voice TTS sources on idle sleep
+
+Glue between per-voice sources and idle sleep: SourceRegistry.unload_all() drops
+every per-voice source when the models go to sleep; they load again on next use.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018B7eR8ZgmRJHqqDNFu2AMy
+---
+ README.md                  |  2 +-
+ src/wyoming_rvc/main.py    |  2 ++
+ src/wyoming_rvc/sources.py | 11 +++++++++++
+ tests/test_sleep.py        | 20 ++++++++++++++++++++
+ 4 files changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index ccbdd43..8caa6f3 100644
+--- a/README.md
++++ b/README.md
+@@ -381,7 +381,7 @@ Copy `.env.example` to `.env`; compose reads it. Empty values mean "use the defa
+ | `MAX_TEXT_CHARS` | `5000` | HTTP request limit |
+ | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `text` | `LOG_FORMAT=json` gives structured logs |
+ 
+-**Idle sleep.** With `IDLE_SLEEP_S` above 0 (default 300), a server with no request for that long unloads the RVC voices, ContentVec, RMVPE and the in-process Piper voice, and reloads them when the next request arrives. That request is slower by the reload time (logged as `Models reloaded in … ms`). The service stays ready (`/readyz`) while asleep, and `/info` shows an `idle_sleep` block. It frees GPU memory; most of the process's system RAM (the CUDA runtime) stays. With `SOURCE=wyoming` and `RVC_ENABLED=false` there is nothing to unload.
++**Idle sleep.** With `IDLE_SLEEP_S` above 0 (default 300), a server with no request for that long unloads the RVC voices, ContentVec, RMVPE, the in-process Piper voice and any per-voice sources, and reloads them when the next request arrives. That request is slower by the reload time (logged as `Models reloaded in … ms`). The service stays ready (`/readyz`) while asleep, and `/info` shows an `idle_sleep` block. It frees GPU memory; most of the process's system RAM (the CUDA runtime) stays. With `SOURCE=wyoming` and `RVC_ENABLED=false` there is nothing to unload.
+ 
+ **Model resolution.** The RVC repo is snapshot-downloaded (only `*.pth`, `*.index`,
+ `*.zip`) into `HF_HOME`. Zips are extracted once to `/models/rvc/<repo>/<archive>/`,
+diff --git a/src/wyoming_rvc/main.py b/src/wyoming_rvc/main.py
+index f93c1e7..1dd0280 100644
+--- a/src/wyoming_rvc/main.py
++++ b/src/wyoming_rvc/main.py
+@@ -288,6 +288,8 @@ class Service:
+         return self.shared is not None or hasattr(self.source, "unload")
+ 
+     def _unload_blocking(self) -> None:
++        if self.sources is not None:
++            self.sources.unload_all()  # per-voice sources reload lazily on their next use
+         if self.shared is not None:
+             self.shared.unload()
+         unload = getattr(self.source, "unload", None)  # only the in-process Piper holds a model
+diff --git a/src/wyoming_rvc/sources.py b/src/wyoming_rvc/sources.py
+index 4a4ece5..c4f2743 100644
+--- a/src/wyoming_rvc/sources.py
++++ b/src/wyoming_rvc/sources.py
+@@ -49,6 +49,17 @@ class SourceRegistry:
+         with self._lock:
+             return list(self._cache)
+ 
++    def unload_all(self) -> list[SourceSpec]:
++        """Drop every per-voice source (idle sleep); they load again on next use. The global source stays."""
++        with self._build_lock, self._lock:
++            specs, sources = list(self._cache), list(self._cache.values())
++            self._cache.clear()
++        for source in sources:
++            unload = getattr(source, "unload", None)  # a Piper engine; an upstream client holds no model
++            if unload is not None:
++                unload()
++        return specs
++
+     # ------------------------------------------------------------------ provisioning
+ 
+     def prepare(self, spec: SourceSpec) -> None:
+diff --git a/tests/test_sleep.py b/tests/test_sleep.py
+index 23bd291..20670ca 100644
+--- a/tests/test_sleep.py
++++ b/tests/test_sleep.py
+@@ -252,3 +252,23 @@ async def test_service_sleep_and_wake_unload_and_reload_everything(monkeypatch):
+     assert not service.voices.is_loaded("v")
+     await service._wake_models()
+     assert service.shared.loads == 1 and service.source.loaded
++
++
++def test_registry_unload_all_drops_per_voice_sources_and_they_reload_on_use():
++    from wyoming_rvc.sources import SourceRegistry
++    from wyoming_rvc.voices import SourceSpec
++
++    registry = SourceRegistry(Settings.from_env({}), "global")
++    made = []
++
++    class Source:
++        unloaded = False
++
++        def unload(self):
++            self.unloaded = True
++
++    registry._build = lambda spec: made.append(Source()) or made[-1]
++    spec = SourceSpec(kind="piper", piper_voice="en_GB-x")
++    first = registry.get(spec)
++    assert registry.unload_all() == [spec] and first.unloaded and registry.loaded() == []
++    assert registry.get(spec) is made[1] and registry.get(None) == "global"
+-- 
+2.43.0
+
